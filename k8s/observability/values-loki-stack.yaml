@@ -1,0 +1,17 @@
+# Loki + Promtail (chart grafana/loki-stack).
+# O servidor Loki é fixado em UM nó via nodeSelector (label poc/loki=true, aplicado por 03-install-platform.sh).
+# O Promtail é DaemonSet e continua em todos os nós (precisa ler os logs de cada um).
+loki:
+  enabled: true
+  isDefault: false
+  nodeSelector:
+    poc/loki: "true"
+  persistence:
+    enabled: true
+    size: 10Gi          # PVC local-path fica preso ao nó escolhido
+promtail:
+  enabled: true
+  tolerations:
+    - operator: Exists  # roda também em nós com taints (ex.: control-plane)
+grafana:
+  enabled: false

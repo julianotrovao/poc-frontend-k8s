@@ -1,0 +1,46 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: Proibir imagens sem tag ou com :latest
+    policies.kyverno.io/severity: medium
+spec:
+  # Nas versões mais novas do Kyverno (>=1.13) prefira `failureAction` dentro de cada regra.
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-image-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces: [kube-system, kube-public, kube-node-lease, kyverno, monitoring, logging, ingress-nginx, argocd, argo-rollouts, harbor]
+      validate:
+        message: "É obrigatório informar a tag (ou digest) da imagem."
+        pattern:
+          spec:
+            containers:
+              - image: "*:*"
+            =(initContainers):
+              - image: "*:*"
+    - name: block-latest-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces: [kube-system, kube-public, kube-node-lease, kyverno, monitoring, logging, ingress-nginx, argocd, argo-rollouts, harbor]
+      validate:
+        message: "Tag mutável ':latest' é proibida. Use uma tag imutável (ex.: SHA do commit) e/ou digest."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"
+            =(initContainers):
+              - image: "!*:latest"

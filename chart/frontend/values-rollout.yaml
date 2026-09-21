@@ -1,0 +1,7 @@
+# Usado pelo ArgoCD (GitOps). image.tag e image.digest são atualizados pelo pipeline.
+image:
+  tag: "1.0.0"
+  digest: ""
+
+rollout:
+  enabled: true

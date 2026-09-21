@@ -1,0 +1,4 @@
+Frontend instalado em {{ .Release.Namespace }}.
+
+  kubectl -n {{ .Release.Namespace }} get all,ingress,hpa
+  curl -H "Host: {{ .Values.ingress.host }}" http://<IP-DO-NODE>/healthz

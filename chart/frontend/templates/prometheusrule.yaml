@@ -1,0 +1,78 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.rules.enabled }}
+{{- $sel := printf `namespace="%s",route=~"/|/api/.*"` .Release.Namespace }}
+{{- $budget := subf 1 .Values.slo.availability }}
+{{- $fast := printf "%.4f" (mulf 14.4 $budget) }}
+{{- $slow := printf "%.4f" (mulf 6 $budget) }}
+{{- $le := .Values.slo.latencyThresholdSeconds }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "frontend.fullname" . }}-slo
+  labels:
+    {{- include "frontend.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    # ---------------- SLIs (regras de gravação) ----------------
+    - name: frontend.sli
+      interval: 30s
+      rules:
+        {{- range $w := list "5m" "30m" "1h" "6h" "30d" }}
+        - record: frontend:sli_availability:ratio_rate{{ $w }}
+          expr: |
+            sum(rate(http_requests_total{ {{ $sel }},status!~"5.." }[{{ $w }}]))
+            /
+            sum(rate(http_requests_total{ {{ $sel }} }[{{ $w }}]))
+        - record: frontend:sli_error_ratio:rate{{ $w }}
+          expr: 1 - frontend:sli_availability:ratio_rate{{ $w }}
+        - record: frontend:sli_latency:ratio_rate{{ $w }}
+          expr: |
+            sum(rate(http_request_duration_seconds_bucket{ {{ $sel }},le="{{ $le }}" }[{{ $w }}]))
+            /
+            sum(rate(http_request_duration_seconds_count{ {{ $sel }} }[{{ $w }}]))
+        {{- end }}
+        - record: frontend:latency_p50_seconds:rate5m
+          expr: histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket{ {{ $sel }} }[5m])))
+        - record: frontend:latency_p95_seconds:rate5m
+          expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{ {{ $sel }} }[5m])))
+        - record: frontend:latency_p99_seconds:rate5m
+          expr: histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{ {{ $sel }} }[5m])))
+        - record: frontend:error_budget_remaining:ratio30d
+          expr: 1 - (frontend:sli_error_ratio:rate30d / {{ $budget }})
+    # ---------------- Alertas de SLO (burn rate multi-janela) ----------------
+    - name: frontend.slo-alerts
+      rules:
+        - alert: FrontendErrorBudgetFastBurn
+          expr: frontend:sli_error_ratio:rate5m > {{ $fast }} and frontend:sli_error_ratio:rate1h > {{ $fast }}
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "Consumo rápido do error budget (14.4x) no frontend"
+            description: 'Taxa de erro 5xx nos últimos 5m: {{ "{{ $value | humanizePercentage }}" }}'
+        - alert: FrontendErrorBudgetSlowBurn
+          expr: frontend:sli_error_ratio:rate30m > {{ $slow }} and frontend:sli_error_ratio:rate6h > {{ $slow }}
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "Consumo lento do error budget (6x) no frontend"
+        - alert: FrontendLatencySLOViolation
+          expr: frontend:sli_latency:ratio_rate5m < {{ .Values.slo.latencyTarget }}
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Menos de {{ mulf .Values.slo.latencyTarget 100 }}% das requisições dentro de {{ .Values.slo.latencyThresholdSeconds }}s"
+        - alert: FrontendHealthzDown
+          expr: probe_success{job="frontend-healthz"} == 0
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "/healthz do frontend não responde 2xx"
+        - alert: FrontendHealthzSlow
+          expr: probe_duration_seconds{job="frontend-healthz"} > 0.5
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "/healthz demorando mais de 500ms"
+{{- end }}

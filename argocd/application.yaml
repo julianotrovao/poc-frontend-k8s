@@ -1,0 +1,25 @@
+# Troque <SEU-USUARIO> pela sua conta/organização no GitHub.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: frontend
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/julianotrovao/poc-frontend-k8s.git
+    targetRevision: main
+    path: chart/frontend
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-rollout.yaml   # image.tag/digest atualizados pelo pipeline
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: frontend
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

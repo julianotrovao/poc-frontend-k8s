@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>poc-frontend-nodejs</title>
+  <style>
+    body{font-family:system-ui,sans-serif;max-width:640px;margin:3rem auto;padding:0 1rem;color:#1f2937}
+    h1{font-size:1.4rem} .card{border:1px solid #e5e7eb;border-radius:8px;padding:1rem;margin:1rem 0}
+    .ok{color:#15803d} .bad{color:#b91c1c} button{padding:.5rem 1rem;cursor:pointer} code{background:#f3f4f6;padding:.1rem .3rem;border-radius:4px}
+  </style>
+</head>
+<body>
+  <h1>poc-frontend-nodejs</h1>
+  <div class="card">
+    <strong>/healthz:</strong> <span id="health">verificando…</span><br>
+    <strong>versão:</strong> <span id="version">-</span> · <strong>pod:</strong> <span id="pod">-</span>
+  </div>
+  <div class="card">
+    <button id="work">Chamar /api/work</button>
+    <p id="result">—</p>
+  </div>
+  <script>
+    async function refresh() {
+      try {
+        const h = await (await fetch('/healthz')).json();
+        const i = await (await fetch('/api/info')).json();
+        document.getElementById('health').textContent = h.status;
+        document.getElementById('health').className = 'ok';
+        document.getElementById('version').textContent = i.version;
+        document.getElementById('pod').textContent = i.hostname;
+      } catch (e) {
+        document.getElementById('health').textContent = 'indisponível';
+        document.getElementById('health').className = 'bad';
+      }
+    }
+    document.getElementById('work').addEventListener('click', async () => {
+      const t0 = performance.now();
+      const r = await fetch('/api/work');
+      document.getElementById('result').textContent =
+        r.status + ' em ' + Math.round(performance.now() - t0) + ' ms';
+    });
+    refresh(); setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

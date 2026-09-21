@@ -1,0 +1,5 @@
+# Necessário porque o Harbor da POC responde em HTTP (registry inseguro).
+admissionController:
+  container:
+    extraArgs:
+      allowInsecureRegistry: true

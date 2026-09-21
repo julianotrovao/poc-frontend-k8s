@@ -1,0 +1,23 @@
+expose:
+  type: ingress
+  tls:
+    enabled: false          # POC em HTTP (registry inseguro). Em produção: TLS + CA confiável.
+  ingress:
+    className: nginx
+    hosts:
+      core: harbor.local
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "false"
+      nginx.ingress.kubernetes.io/proxy-body-size: "0"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+externalURL: http://harbor.local
+harborAdminPassword: "Harbor12345"   # troque!
+persistence:
+  enabled: true
+  persistentVolumeClaim:
+    registry:
+      size: 10Gi
+trivy:
+  enabled: true
+metrics:
+  enabled: false

@@ -1,0 +1,203 @@
+name: ci-cd
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "evidencias/**"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: harbor.local
+  IMAGE: harbor.local/poc/frontend
+  SONAR_HOST_URL: https://sonarcloud.io   # SonarCloud (organização definida em app/sonar-project.properties)
+
+jobs:
+  # ------------------------------------------------------------------
+  # 1) Testes automatizados + SAST (SonarCloud) + Quality Gate
+  # ------------------------------------------------------------------
+  test-sast:
+    runs-on: [self-hosted, linux, poc-k8s]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # o Sonar precisa do histórico completo
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Testes unitários + cobertura
+        working-directory: app
+        run: |
+          npm ci
+          npm run lint
+          npm test
+
+      # SonarCloud analisa branch main e Pull Requests (PRs de forks não recebem secrets)
+      - name: SonarCloud scan (SAST)
+        uses: SonarSource/sonarqube-scan-action@v5
+        with:
+          projectBaseDir: app
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+
+      - name: Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+
+  # ------------------------------------------------------------------
+  # 2) Validação do chart Helm
+  # ------------------------------------------------------------------
+  chart-lint:
+    runs-on: [self-hosted, linux, poc-k8s]
+    steps:
+      - uses: actions/checkout@v4
+      - name: helm lint
+        run: |
+          helm lint chart/frontend
+          helm lint chart/frontend -f chart/frontend/values-rollout.yaml
+      - name: helm template (Deployment e Rollout)
+        run: |
+          helm template frontend chart/frontend -n frontend > /tmp/render-deploy.yaml
+          helm template frontend chart/frontend -n frontend -f chart/frontend/values-rollout.yaml > /tmp/render-rollout.yaml
+      - name: Trivy config (misconfiguração do chart)
+        run: trivy config --exit-code 0 --severity HIGH,CRITICAL chart/frontend
+
+  # ------------------------------------------------------------------
+  # 3) Build -> Trivy (scan de imagem) -> Push -> Assinatura cosign
+  # ------------------------------------------------------------------
+  build-scan-sign:
+    needs: [test-sast, chart-lint]
+    runs-on: [self-hosted, linux, poc-k8s]
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Metadados
+        id: meta
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build (estágio de testes + imagem final)
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          docker build --target test app
+          docker build --build-arg APP_VERSION="$TAG" -t "$IMAGE:$TAG" app
+
+      - name: Trivy — scan da imagem (falha em HIGH/CRITICAL corrigíveis)
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          trivy image --no-progress --format table --output trivy-report.txt "$IMAGE:$TAG"
+          trivy image --no-progress --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed "$IMAGE:$TAG"
+
+      - name: Guardar relatório do Trivy
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.txt
+          if-no-files-found: ignore
+
+      - name: Login no Harbor e push (somente main)
+        id: push
+        if: github.ref == 'refs/heads/main'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          echo "$HARBOR_PASSWORD" | docker login "$REGISTRY" -u "$HARBOR_USERNAME" --password-stdin
+          docker push "$IMAGE:$TAG"
+          DIGEST="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$TAG" | cut -d@ -f2)"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: cosign — assinar a imagem (por digest)
+        if: github.ref == 'refs/heads/main'
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cosign sign --yes --key env://COSIGN_PRIVATE_KEY \
+            --tlog-upload=false --allow-insecure-registry "$IMAGE@$DIGEST"
+
+      - name: cosign — verificar a assinatura
+        if: github.ref == 'refs/heads/main'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cosign verify --key cosign.pub --insecure-ignore-tlog=true \
+            --allow-insecure-registry "$IMAGE@$DIGEST"
+
+  # ------------------------------------------------------------------
+  # 4) GitOps: atualiza o Git com a nova imagem; o ArgoCD faz o deploy (canary)
+  # ------------------------------------------------------------------
+  gitops-deploy:
+    needs: [build-scan-sign]
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, poc-k8s]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Atualizar image.tag/digest em values-rollout.yaml
+        env:
+          TAG: ${{ needs.build-scan-sign.outputs.tag }}
+          DIGEST: ${{ needs.build-scan-sign.outputs.digest }}
+        run: |
+          yq -i '.image.tag = strenv(TAG) | .image.digest = strenv(DIGEST)' chart/frontend/values-rollout.yaml
+          git config user.name  "poc-ci-bot"
+          git config user.email "poc-ci-bot@users.noreply.github.com"
+          git add chart/frontend/values-rollout.yaml
+          git commit -m "chore(deploy): frontend ${TAG} [skip ci]" || echo "nada a commitar"
+          git pull --rebase origin main
+          git push origin main
+
+  # ------------------------------------------------------------------
+  # 5) Acompanha o canary no cluster (requer ~/.kube/config do usuário do runner)
+  # ------------------------------------------------------------------
+  post-deploy-check:
+    needs: [build-scan-sign, gitops-deploy]
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, poc-k8s]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: ArgoCD — refresh/sync imediato (opcional; sem token o ArgoCD sincroniza sozinho em ~3 min)
+        env:
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+        run: |
+          if [ -n "$ARGOCD_AUTH_TOKEN" ] && [ -n "$ARGOCD_SERVER" ]; then
+            argocd app get frontend --refresh --server "$ARGOCD_SERVER" --insecure --grpc-web >/dev/null
+            argocd app sync frontend --server "$ARGOCD_SERVER" --insecure --grpc-web || true
+          else
+            echo "ARGOCD_AUTH_TOKEN/ARGOCD_SERVER não definidos — aguardando o polling do ArgoCD"
+          fi
+      - name: Aguardar ArgoCD + canary
+        run: scripts/wait-rollout.sh "${{ needs.build-scan-sign.outputs.digest }}"
+      - name: Smoke test
+        run: curl -fsS --resolve frontend.local:80:${{ secrets.INGRESS_IP }} http://frontend.local/healthz

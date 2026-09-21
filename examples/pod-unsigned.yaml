@@ -1,0 +1,10 @@
+# Deve ser NEGADO pelo Kyverno (imagem do Harbor sem assinatura cosign)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: teste-sem-assinatura
+  namespace: frontend
+spec:
+  containers:
+    - name: app
+      image: harbor.local/poc/frontend:nao-assinada

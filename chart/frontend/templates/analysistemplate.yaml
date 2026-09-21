@@ -1,0 +1,26 @@
+{{- if and .Values.rollout.enabled .Values.rollout.analysis.enabled }}
+# Análise automática do canary: taxa de sucesso (não-5xx) dos pods novos.
+# Se cair abaixo de minSuccessRate, o Rollout é abortado e volta para a versão estável.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ include "frontend.fullname" . }}-success-rate
+  labels:
+    {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  args:
+    - name: canary-hash
+  metrics:
+    - name: success-rate
+      interval: 15s
+      count: 4
+      failureLimit: 1
+      successCondition: len(result) == 0 || isNaN(result[0]) || result[0] >= {{ .Values.rollout.analysis.minSuccessRate }}
+      provider:
+        prometheus:
+          address: {{ .Values.rollout.analysis.prometheusAddress }}
+          query: |
+            sum(rate(http_requests_total{namespace="{{ .Release.Namespace }}",pod=~"{{ include "frontend.fullname" . }}-{{`{{args.canary-hash}}`}}-.*",route=~"/|/api/.*",status!~"5.."}[1m]))
+            /
+            sum(rate(http_requests_total{namespace="{{ .Release.Namespace }}",pod=~"{{ include "frontend.fullname" . }}-{{`{{args.canary-hash}}`}}-.*",route=~"/|/api/.*"}[1m]))
+{{- end }}

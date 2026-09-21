@@ -1,0 +1,22 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.probe.enabled }}
+# Sonda sintética (blackbox-exporter) no /healthz: probe_success e probe_duration_seconds.
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: {{ include "frontend.fullname" . }}-healthz
+  labels:
+    {{- include "frontend.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  jobName: frontend-healthz
+  interval: {{ .Values.monitoring.interval }}
+  module: http_2xx
+  prober:
+    url: {{ .Values.monitoring.probe.blackboxUrl }}
+  targets:
+    staticConfig:
+      static:
+        - http://{{ include "frontend.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/healthz
+{{- end }}

@@ -1,0 +1,31 @@
+# Cole em `scrape_configs:` do prometheus.yml (ou additionalScrapeConfigs) SOMENTE se o seu
+# Prometheus não usa o Operator (sem CRDs PodMonitor/Probe). Requer RBAC para listar pods.
+- job_name: frontend
+  kubernetes_sd_configs:
+    - role: pod
+      namespaces:
+        names: [frontend]
+  relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+      regex: frontend
+      action: keep
+    - source_labels: [__meta_kubernetes_pod_container_port_name]
+      regex: http
+      action: keep
+    - source_labels: [__meta_kubernetes_namespace]
+      target_label: namespace
+    - source_labels: [__meta_kubernetes_pod_name]
+      target_label: pod
+- job_name: frontend-healthz
+  metrics_path: /probe
+  params:
+    module: [http_2xx]
+  static_configs:
+    - targets: ["http://frontend.frontend.svc.cluster.local:80/healthz"]
+  relabel_configs:
+    - source_labels: [__address__]
+      target_label: __param_target
+    - source_labels: [__param_target]
+      target_label: instance
+    - target_label: __address__
+      replacement: prometheus-blackbox-exporter.monitoring.svc.cluster.local:9115

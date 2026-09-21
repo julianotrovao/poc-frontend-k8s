@@ -1,0 +1,10 @@
+# Deve ser NEGADO pelo Kyverno (tag :latest)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: teste-latest
+  namespace: frontend
+spec:
+  containers:
+    - name: nginx
+      image: nginx:latest

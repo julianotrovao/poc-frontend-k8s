@@ -1,0 +1,34 @@
+# Template: o marcador de chave pública abaixo é substituído por scripts/06-apply-policies.sh (conteúdo de cosign.pub)
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-image-signature
+  annotations:
+    policies.kyverno.io/title: Exigir imagens assinadas com cosign
+spec:
+  validationFailureAction: Enforce
+  background: false
+  webhookTimeoutSeconds: 30
+  rules:
+    - name: verify-cosign-signature
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [frontend]
+      verifyImages:
+        - imageReferences:
+            - "harbor.local/poc/*"
+          mutateDigest: false   # o digest já vem do Git (evita drift no ArgoCD)
+          verifyDigest: true
+          required: true
+          attestors:
+            - count: 1
+              entries:
+                - keys:
+                    publicKeys: |-
+__COSIGN_PUBLIC_KEY__
+                    rekor:
+                      ignoreTlog: true   # assinatura offline (--tlog-upload=false)
+                    ctlog:
+                      ignoreSCT: true

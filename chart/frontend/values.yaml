@@ -1,0 +1,84 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: harbor.local/poc/frontend
+  tag: "1.0.0"
+  # Preenchido pelo pipeline (sha256:...). Com digest a imagem fica imutável e a
+  # policy de verificação de assinatura (Kyverno) valida exatamente esse conteúdo.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+replicaCount: 2   # ignorado quando autoscaling.enabled=true
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+
+ingress:
+  enabled: true
+  className: nginx
+  host: frontend.local
+  annotations: {}
+
+# ConfigMap -> variáveis de ambiente
+config:
+  APP_ENV: poc
+  LOG_LEVEL: info
+  WORK_MIN_MS: "20"
+  WORK_MAX_MS: "120"
+  ERROR_RATE: "0"
+
+# Secret -> variáveis de ambiente. ATENÇÃO: valor de demonstração.
+# Em uso real: Sealed Secrets / SOPS / External Secrets (nunca segredo em texto puro no Git).
+secret:
+  enabled: true
+  data:
+    API_KEY: "change-me"
+
+resources:
+  requests: { cpu: 100m, memory: 96Mi }
+  limits: { cpu: 300m, memory: 192Mi }
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 60
+
+probes:
+  liveness: { path: /healthz, initialDelaySeconds: 5, periodSeconds: 10 }
+  readiness: { path: /readyz, initialDelaySeconds: 3, periodSeconds: 5 }
+
+podAnnotations: {}
+
+# ---- Canary (Argo Rollouts). false = Deployment RollingUpdate comum.
+rollout:
+  enabled: false
+  pauseSeconds: 30
+  analysis:
+    enabled: true
+    # Prometheus existente (NodePort). Se preferir, use o Service interno: http://<svc>.<ns>.svc.cluster.local:9090
+    prometheusAddress: http://201.23.88.239:30900
+    minSuccessRate: 0.95
+
+# ---- Observabilidade no Prometheus/Grafana EXISTENTES (exige CRDs do Prometheus Operator)
+monitoring:
+  enabled: true
+  interval: 15s
+  # Labels extras nos PodMonitor/Probe/PrometheusRule para o seu Prometheus selecioná-los.
+  # Descubra com:  kubectl get prometheus -A -o yaml | grep -A5 -E "podMonitorSelector|ruleSelector|probeSelector"
+  # Ex. kube-prometheus-stack instalado com release "prom":  labels: { release: prom }
+  labels: {}
+  rules:
+    enabled: true
+  probe:
+    enabled: true
+    blackboxUrl: prometheus-blackbox-exporter.monitoring.svc.cluster.local:9115
+
+# ---- SLOs (valores usados nas regras de gravação e alertas)
+slo:
+  availability: 0.995            # 99,5% das requisições sem 5xx (janela de 30d)
+  latencyThresholdSeconds: 0.3   # deve coincidir com um bucket do histograma
+  latencyTarget: 0.95            # 95% das requisições <= 300ms

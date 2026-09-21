@@ -1,0 +1,39 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-best-practices
+  annotations:
+    policies.kyverno.io/title: Boas práticas mínimas (modo Audit)
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-requests-limits
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [frontend]
+      validate:
+        message: "requests de cpu/memory e limit de memory são obrigatórios."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  requests:
+                    cpu: "?*"
+                    memory: "?*"
+                  limits:
+                    memory: "?*"
+    - name: run-as-non-root
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [frontend]
+      validate:
+        message: "O Pod deve rodar como não-root."
+        pattern:
+          spec:
+            securityContext:
+              runAsNonRoot: true
